@@ -20,6 +20,7 @@ class CookieClicker(object):
     def __init__(self):
         self.driver = webdriver.Chrome(CHROME_DRIVER_PATH) 
         self.cookie = None
+        self.upgrade = None
         self.product_num = 0
         self.loop_index = 1
 
@@ -31,6 +32,7 @@ class CookieClicker(object):
 
         while True:
 
+            start = time.time()
             for _ in range(CLICKS_PER_SECOND*2):
                 self.cookie.click()
             
@@ -42,24 +44,41 @@ class CookieClicker(object):
                 product = self.driver.find_element_by_xpath(f"//*[@id=\"product{purchase_product_num}\"]")
                 if product.get_attribute("class") == "product unlocked enabled":
                     # if available
-                    print(f"Buying product {purchase_product_num}")
+                    #print(f"Buying product {purchase_product_num}")
                     product.click()
                     if purchase_product_num == self.product_num:
                         self.product_num += 1
-                        print(f"Incrementing product num to {self.product_num}")
+                        #print(f"Incrementing product num to {self.product_num}")
                 else:
                     purchase_product_num -= 1
                     continue
                 break
             
+            #print(f"Loop time {time.time() - start}")
+            
+    def click_golden_cookie_if_possible(self):
+            try:
+                golden_cookie = self.driver.find_element_by_xpath("//*[@id=\"shimmers\"]")
+                golden_cookie.click()
+                print("Clicked the golgen cookie!")
+            except:
+                pass
+
+    
     def purchase_upgrade_if_possible(self):
         try:
-            upgrade = self.driver.find_element_by_xpath(UPGRADE_PATH)
-            if upgrade.get_attribute("class") == "crate upgrade enabled":
-                print("Buying upgrade")
-                upgrade.click()
+            # define only if not defined
+            if self.upgrade is None:
+                self.upgrade = self.driver.find_element_by_xpath(UPGRADE_PATH)
+            #try to click if you can
+            if self.upgrade.get_attribute("class") == "crate upgrade enabled":
+                #print("Buying upgrade")
+                self.upgrade.click()
+                self.upgrade = None
         except Exception as _:
-            print("No upgrade available")
+            self.upgrade = None
+            #print("No upgrade available")
+
 
     def get_cookie_count(self) -> int:
         cookies = self.driver.find_element_by_xpath(COOKIE_COUNT_PATH)
