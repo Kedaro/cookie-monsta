@@ -9,9 +9,10 @@ import logging
 from dataclasses import dataclass
 
 
-# TODO: cps of building needs to be updated as upgrades are bought
 # TODO: instead of min cost/cps use this algo (1.15*(cost/cps) + cost/delta(cps)) https://cookieclicker.fandom.com/wiki/Frozen_Cookies_%28JavaScript_Add-on%29#Efficiency.3F_What.27s_that.3F
 # TODO: configurable strategy (greedy, discount future)
+# TODO: log cps over time. Build tools to plot and compare 
+# TODO: find most efficient solution to tooltip issue
 
 CHROME_DRIVER_PATH = "/home/syd/Desktop/utilities/chromedriver_linux64/chromedriver" 
 SITE_URL = "https://orteil.dashnet.org/cookieclicker/"
@@ -26,23 +27,6 @@ MAX_BUILING_INDEX = max(INITIAL_CPS_BUILDINGS, key=int)
 logger = logging.getLogger('clicker')
 logger.setLevel(logging.INFO)
 
-def update_cost_and_cps_decorator(func):
-    def wrap(self, *args, **kwargs):
-        return_val = func(self, *args, **kwargs)
-        logger.info("Updating cost and cps.")
-        self.update_building_info(update_cps=True)
-        return return_val
-    
-    return wrap
-
-def update_cost_decorator(func):
-    def wrap(self, *args, **kwargs):
-        return_val = func(self, *args, **kwargs)
-        logger.info("Updating just cost.")
-        self.update_building_info(update_cps=False)
-        return return_val
-    
-    return wrap
 
 @dataclass
 class BuildingInfo:
@@ -59,8 +43,7 @@ class CookieClicker(object):
 
         self.building_info_store = {0: BuildingInfo(cost=15, cps=INITIAL_CPS_BUILDINGS[0])} # initial cost of cookie divided by initial cps
 
-        self.product_num = 0
-        self.loop_index = 1
+        self.loops_since_cps_update = 0
 
     def run(self):
         self.driver.get(SITE_URL)
@@ -69,12 +52,18 @@ class CookieClicker(object):
         self.cookie = self.driver.find_element_by_xpath(COOKIE_PATH)
 
         while True:
+            self.loops_since_cps_update += 1
 
             for _ in range(CLICKS_PER_SECOND*2):
                 self.cookie.click()
             
             self.click_golden_cookie_if_possible()
             self.purchase_upgrade_if_possible()
+
+            # Force a cps update every 10 cycles
+            if self.loops_since_cps_update > 10 :
+                self.loop_index = 0
+                self.update_building_info(update_cps=True)
 
             # most efficient building key
             best_building = self.get_best_building_to_purchase()
@@ -94,7 +83,7 @@ class CookieClicker(object):
         min_index = 0
         for (index, info) in self.building_info_store.items():
             cost_per_cps = info.cost/info.cps
-            logger.debug(f"Building {index}: Cost/cps: {cost_per_cps}")
+            logger.debug(f"Building {index}: Cost/cps: {cost_per_cps} Cost:{info.cost} CPS: {info.cps}")
             if (min_val is None) or (min_val > cost_per_cps):
                 min_val = cost_per_cps
                 min_index = index
@@ -105,35 +94,46 @@ class CookieClicker(object):
         """
         returns cost, cps
         """
-
-        action = ActionChains(self.driver)
-
-        parent_level_menu = self.driver.find_element_by_xpath(f"//*[@id=\"product{building_num}\"]") 
-        action.move_to_element(parent_level_menu).perform()
-
-        tooltip = self.driver.find_element_by_xpath(f"//*[@id=\"tooltip\"]")
-        tooltip_text = tooltip.text
-
-        lines = tooltip_text.splitlines()
         
-        cost = 0
-        cps = 0
+        while True:
+            failed = False
 
-        # parse tootip text
-        if len(lines) > 5:
-            cost = cookie_count_text_to_float(lines[0])
-            cps_text = lines[4]
-            cps_text = re.sub(r'^\D*', "", cps_text)
-            cps_text = cps_text.strip(" cookies per second")
-            cps = cookie_count_text_to_float(cps_text)
-        else:
+            action = ActionChains(self.driver)
+
+            parent_level_menu = self.driver.find_element_by_xpath(f"//*[@id=\"product{building_num}\"]") 
+            action.move_to_element(parent_level_menu).perform()
+
+            tooltip = self.driver.find_element_by_xpath(f"//*[@id=\"tooltip\"]")
+            tooltip_text = tooltip.text
+
             price_obj = self.driver.find_element_by_xpath(f"//*[@id=\"productPrice{building_num}\"]")
-            cost = cookie_count_text_to_float(price_obj.text)
             
-            logger.debug("Using initial cps value")
-            cps = INITIAL_CPS_BUILDINGS[building_num]
+            # set initial values
+            cost = cookie_count_text_to_float(price_obj.text)
+            cps = 0
 
-        return cost, cps
+            lines = tooltip_text.splitlines()
+
+            # parse tootip text
+            if len(lines) > 5:
+                tool_tip_cost = cookie_count_text_to_float(lines[0])
+                
+                # there is an issue with getting the tooltip data, sometimes returns values for wrong item
+                # this comparison will not work if they coicedentally cost the same (v. unlikely)
+                if tool_tip_cost != cost:
+                    logger.warning(f"Failed to get correct info for Building {building_num}. Acutal cost {cost}, tooltip cost {tool_tip_cost} ")
+                    failed = True
+
+                cps_text = lines[4]
+                cps_text = re.sub(r'^\D*', "", cps_text)
+                cps_text = cps_text.strip(" cookies per second")
+                cps = cookie_count_text_to_float(cps_text)
+            else:            
+                logger.debug("Using initial cps value")
+                cps = INITIAL_CPS_BUILDINGS[building_num]
+
+            if not failed:
+                return cost, cps
 
     def quick_get_cost_building(self, building_num: int) -> float:
         price_obj = self.driver.find_element_by_xpath(f"//*[@id=\"productPrice{building_num}\"]")
@@ -146,6 +146,9 @@ class CookieClicker(object):
 
         update_cps is optional becuase it takes along time and only need to be done when upgrade is bought
         """
+        if update_cps:
+            logger.debug("Updating CPS")
+        
         purchase_product_num = 0
         while purchase_product_num <= MAX_BUILING_INDEX: 
             # check if product is unlocked
@@ -164,20 +167,24 @@ class CookieClicker(object):
                 purchase_product_num += 1
                 continue
             # if still locked, ignore it and the rest (because unlocked sequentially)
-            return
+            break
+        
+        if update_cps:
+            self.loops_since_cps_update = 0
 
-    @update_cost_and_cps_decorator
     def _click_upgrade_product(self, selenium_object, description=None):
         selenium_object.click()
         logger.debug(f"Clicking upgrade: {description}")
-    
-    @update_cost_decorator
+        self.update_building_info(update_cps=True)
+
+
     def _click_non_upgrade_product(self, selenium_object, description=None):
         selenium_object.click()
         logger.debug(f"Clicking non upgrade, non cookie: {description}")
-        
+        self.update_building_info(update_cps=False)        
     
-    def click_golden_cookie_if_possible(self):
+    def click_golden_cookie_if_possible(self) -> bool:
+            clicked = False
             try:
                 golden_cookies_children = self.driver.find_element_by_xpath("//*[@id=\"goldenCookie\"]").find_elements_by_xpath(".//*")
                 shimmers_children = self.driver.find_element_by_xpath("//*[@id=\"shimmers\"]").find_elements_by_xpath(".//*")
@@ -190,15 +197,20 @@ class CookieClicker(object):
                     logger.info("About to click golden cookie child")
                     self._click_non_upgrade_product(child)
                     logger.info("Clicked golden cookie")
+                    clicked = True
                 if len(shimmers_children) > 0:
                     child = shimmers_children[0]
                     logger.info("About to click  shimers child child")
                     self._click_non_upgrade_product(child)
                     logger.info("Clicked shimers child")
+                    clicked = True
             except:
                 logger.error("Failed to click bonus")
+            finally:
+                return clicked
     
     def purchase_upgrade_if_possible(self):
+        clicked = False
         try:
             # define only if not defined
             if self.upgrade is None:
@@ -208,9 +220,12 @@ class CookieClicker(object):
                 logger.debug("Buying upgrade")
                 self._click_upgrade_product(self.upgrade)
                 self.upgrade = None
+                clicked = True
         except Exception as _:
             self.upgrade = None
             logger.debug("No upgrade available")
+        finally:
+            return clicked
 
 
     def get_cookie_count(self) -> float:
