@@ -6,6 +6,7 @@ from config import INITIAL_CPS_BUILDINGS
 import time
 import re
 import logging
+from dataclasses import dataclass
 
 
 # TODO: cps of building needs to be updated as upgrades are bought
@@ -25,14 +26,28 @@ MAX_BUILING_INDEX = max(INITIAL_CPS_BUILDINGS, key=int)
 logger = logging.getLogger('clicker')
 logger.setLevel(logging.INFO)
 
-def update_cost_cps_decorator(func):
+def update_cost_and_cps_decorator(func):
     def wrap(self, *args, **kwargs):
         return_val = func(self, *args, **kwargs)
-        logger.info("Updating cost.")
-        self.update_cost_per_cps()
+        logger.info("Updating cost and cps.")
+        self.update_building_info(update_cps=True)
         return return_val
     
     return wrap
+
+def update_cost_decorator(func):
+    def wrap(self, *args, **kwargs):
+        return_val = func(self, *args, **kwargs)
+        logger.info("Updating just cost.")
+        self.update_building_info(update_cps=False)
+        return return_val
+    
+    return wrap
+
+@dataclass
+class BuildingInfo:
+    cost: float
+    cps: float
 
 
 
@@ -42,7 +57,7 @@ class CookieClicker(object):
         self.cookie = None
         self.upgrade = None
 
-        self.cost_per_cps = {0: 15/INITIAL_CPS_BUILDINGS[0]} # initial cost of cookie divided by initial cps
+        self.building_info_store = {0: BuildingInfo(cost=15, cps=INITIAL_CPS_BUILDINGS[0])} # initial cost of cookie divided by initial cps
 
         self.product_num = 0
         self.loop_index = 1
@@ -62,21 +77,35 @@ class CookieClicker(object):
             self.purchase_upgrade_if_possible()
 
             # most efficient building key
-            best_building = min(self.cost_per_cps, key=self.cost_per_cps.get)
+            best_building = self.get_best_building_to_purchase()
             # check if available
             product = self.driver.find_element_by_xpath(f"//*[@id=\"product{best_building}\"]")
             if product.get_attribute("class") == "product unlocked enabled":
                 # purchase
-                self._click_non_cookie_poduct(product)
+                self._click_non_upgrade_product(product)
             # otherwise wait to buy
             else:
                 logger.debug(f"Waiting to buy product {best_building}")
                 pass
-            
-    def decor_debug(self):
-        print("Class decorated")
+
+    def get_best_building_to_purchase(self) -> int:
+        # TODO: implement various startegies
+        min_val = None
+        min_index = 0
+        for (index, info) in self.building_info_store.items():
+            cost_per_cps = info.cost/info.cps
+            logger.debug(f"Building {index}: Cost/cps: {cost_per_cps}")
+            if (min_val is None) or (min_val > cost_per_cps):
+                min_val = cost_per_cps
+                min_index = index
+        return min_index
+
     
-    def get_cost_per_cps_building(self, building_num: int) -> float:
+    def get_cost_and_cps_building(self, building_num: int) -> (float, float):
+        """
+        returns cost, cps
+        """
+
         action = ActionChains(self.driver)
 
         parent_level_menu = self.driver.find_element_by_xpath(f"//*[@id=\"product{building_num}\"]") 
@@ -104,31 +133,48 @@ class CookieClicker(object):
             logger.debug("Using initial cps value")
             cps = INITIAL_CPS_BUILDINGS[building_num]
 
-        return cost/cps
-         
+        return cost, cps
 
-    def update_cost_per_cps(self):
+    def quick_get_cost_building(self, building_num: int) -> float:
+        price_obj = self.driver.find_element_by_xpath(f"//*[@id=\"productPrice{building_num}\"]")
+        return cookie_count_text_to_float(price_obj.text)
+
+    def update_building_info(self, update_cps):
         """
         Must be called anytime an action is taken that could change the cost/cps
         use the update_cost_cps_decorator
+
+        update_cps is optional becuase it takes along time and only need to be done when upgrade is bought
         """
         purchase_product_num = 0
         while purchase_product_num <= MAX_BUILING_INDEX: 
             # check if product is unlocked
             product = self.driver.find_element_by_xpath(f"//*[@id=\"product{purchase_product_num}\"]")            
             if product.get_attribute("class") in ("product unlocked enabled", "product unlocked disabled"):
-                logger.debug(f"Builing {purchase_product_num} cost/cps: {self.get_cost_per_cps_building(purchase_product_num)}")
-                self.cost_per_cps[purchase_product_num] = self.get_cost_per_cps_building(purchase_product_num)
-                # self.cost_per_cps[purchase_product_num] = self.get_weighted_price_building(purchase_product_num) # old method
+                if update_cps:
+                    cost, cps = self.get_cost_and_cps_building(purchase_product_num) 
+                    self.building_info_store[purchase_product_num] = BuildingInfo(cost=cost, cps=cps)
+                else:
+                    cost = self.quick_get_cost_building(purchase_product_num)
+                    if purchase_product_num in self.building_info_store:
+                        self.building_info_store[purchase_product_num].cost = cost
+                    else:
+                        self.building_info_store[purchase_product_num] = BuildingInfo(cost=cost, cps=INITIAL_CPS_BUILDINGS[purchase_product_num])
+
                 purchase_product_num += 1
                 continue
             # if still locked, ignore it and the rest (because unlocked sequentially)
             return
 
-    @update_cost_cps_decorator
-    def _click_non_cookie_poduct(self, selenium_object, description=None):
+    @update_cost_and_cps_decorator
+    def _click_upgrade_product(self, selenium_object, description=None):
         selenium_object.click()
-        logger.debug(f"Clicking object other than cookie: {description}")
+        logger.debug(f"Clicking upgrade: {description}")
+    
+    @update_cost_decorator
+    def _click_non_upgrade_product(self, selenium_object, description=None):
+        selenium_object.click()
+        logger.debug(f"Clicking non upgrade, non cookie: {description}")
         
     
     def click_golden_cookie_if_possible(self):
@@ -142,12 +188,12 @@ class CookieClicker(object):
                 if len(golden_cookies_children) > 0:
                     child = golden_cookies_children[0]
                     logger.info("About to click golden cookie child")
-                    self._click_non_cookie_poduct(child)
+                    self._click_non_upgrade_product(child)
                     logger.info("Clicked golden cookie")
                 if len(shimmers_children) > 0:
                     child = shimmers_children[0]
                     logger.info("About to click  shimers child child")
-                    self._click_non_cookie_poduct(child)
+                    self._click_non_upgrade_product(child)
                     logger.info("Clicked shimers child")
             except:
                 logger.error("Failed to click bonus")
@@ -160,17 +206,11 @@ class CookieClicker(object):
             #try to click if you can
             if self.upgrade.get_attribute("class") == "crate upgrade enabled":
                 logger.debug("Buying upgrade")
-                self._click_non_cookie_poduct(self.upgrade)
+                self._click_upgrade_product(self.upgrade)
                 self.upgrade = None
         except Exception as _:
             self.upgrade = None
             logger.debug("No upgrade available")
-
-    def depricated_get_weighted_price_building(self, building_num: int):
-        price_obj = self.driver.find_element_by_xpath(f"//*[@id=\"productPrice{building_num}\"]")
-        cost_per_cps = cookie_count_text_to_float(price_obj.text)/INITIAL_CPS_BUILDINGS[building_num]
-        #logger.debug(f"Building {building_num} has cost/cps {cost_per_cps}")
-        return cost_per_cps
 
 
     def get_cookie_count(self) -> float:
