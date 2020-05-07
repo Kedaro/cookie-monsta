@@ -11,8 +11,8 @@ from dataclasses import dataclass
 
 # TODO: instead of min cost/cps use this algo (1.15*(cost/cps) + cost/delta(cps)) https://cookieclicker.fandom.com/wiki/Frozen_Cookies_%28JavaScript_Add-on%29#Efficiency.3F_What.27s_that.3F
 # TODO: configurable strategy (greedy, discount future)
+
 # TODO: log cps over time. Build tools to plot and compare 
-# TODO: find most efficient solution to tooltip issue
 
 CHROME_DRIVER_PATH = "/home/syd/Desktop/utilities/chromedriver_linux64/chromedriver" 
 SITE_URL = "https://orteil.dashnet.org/cookieclicker/"
@@ -76,19 +76,31 @@ class CookieClicker(object):
             else:
                 logger.debug(f"Waiting to buy product {best_building}")
                 pass
-
+    
     def get_best_building_to_purchase(self) -> int:
         # TODO: implement various startegies
-        min_val = None
-        min_index = 0
-        for (index, info) in self.building_info_store.items():
-            cost_per_cps = info.cost/info.cps
-            logger.debug(f"Building {index}: Cost/cps: {cost_per_cps} Cost:{info.cost} CPS: {info.cps}")
-            if (min_val is None) or (min_val > cost_per_cps):
-                min_val = cost_per_cps
-                min_index = index
-        return min_index
+        # def loss(key_element):
+        #     return self.building_info_store[key_element].cost/self.building_info_store[key_element].cps
 
+        # return min(self.building_info_store, key=(lambda key_element: loss(key_element)))
+
+        def loss(current_cps: float, key_element: int):
+            cost = self.building_info_store[key_element].cost
+            delta_cps = self.building_info_store[key_element].cps
+            if current_cps != 0:
+                val = 1.15 * (cost/current_cps) + (cost/delta_cps)
+            else:
+                val = cost/delta_cps
+            
+            return val
+        
+        curr_cps = self.get_current_production_cps()
+
+        return min(self.building_info_store, key=(lambda key_element: loss(curr_cps, key_element)))
+
+
+        
+        
     
     def get_cost_and_cps_building(self, building_num: int) -> (float, float):
         """
@@ -231,13 +243,26 @@ class CookieClicker(object):
     def get_cookie_count(self) -> float:
         cookies = self.driver.find_element_by_xpath(COOKIE_COUNT_PATH)
         txt = cookies.text
-        # remove from new line on
-        txt_count = re.sub(r'\s.*$', "", txt)
-        # remove cookies label
+        # split from new line on
+        lines = txt.split('\n')
+        # remove cookies word
+        txt_count = lines[0]
         txt_count = txt_count.strip(" cookies")
-        # remove and commas
+        # remove commas
         txt_count = txt_count.strip(",")
         return cookie_count_text_to_float(txt_count)
+
+    def get_current_production_cps(self) -> float:
+        cookies = self.driver.find_element_by_xpath(COOKIE_COUNT_PATH)
+        txt = cookies.text
+        # split from new line on
+        lines = txt.split('\n')
+        # remove cookies word
+        txt_cps = lines[1]
+        txt_cps = txt_cps.strip("per second: ")
+        # remove commas
+        txt_cps = txt_cps.strip(",")
+        return cookie_count_text_to_float(txt_cps)
 
     def clean_up(self):
         try:
