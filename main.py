@@ -12,8 +12,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Cookie Monsta App')
 
     parser.add_argument('-p', '--path_to_chrome_driver',  required=True, type=str)
-    parser.add_argument('-s', '--strategy', help="purchase strategy (int) see README for mapping", default=1, type=int)
     parser.add_argument('-a', '--absolute_save_path', help="absolute save path, where game progress will be saved and loaded (recommended)", default="", type=str)
+    parser.add_argument('-s', '--strategy', help="purchase strategy (int) see README for mapping", default=1, type=int)
 
     parser = parser.parse_args()
 
