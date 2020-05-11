@@ -55,42 +55,14 @@ class CookieClicker(object):
         self.loops_since_cps_update = 0
 
     def run(self):
-        self.driver.get(SITE_URL)
-        #self.driver.execute_script("document.body.style.zoom='75%'")
-        # sleep to load
-        time.sleep(2)
-        self.cookie = self.driver.find_element_by_xpath(COOKIE_PATH)
+
+        self.start_up()
 
         while True:
 
             try:
-                self.loops_since_cps_update += 1
+                self.tick()
 
-                for _ in range(CLICKS_PER_SECOND*2):
-                    self.cookie.click()
-
-                logger.info(f"Current CPS: {self.get_current_production_cps()}")
-                
-                self.click_golden_cookie_if_possible()
-                self.purchase_upgrade_if_possible()
-
-                # Force a cps update every 10 cycles
-                if self.loops_since_cps_update > 10 :
-                    self.loop_index = 0
-                    self.update_building_info(update_cps=True)
-
-                # most efficient building key
-                best_building = self.get_best_building_to_purchase()
-                # check if available
-                product = self.driver.find_element_by_xpath(f"//*[@id=\"product{best_building}\"]")
-                if product.get_attribute("class") == "product unlocked enabled":
-                    # purchase
-                    self._click_non_upgrade_product(product)
-                # otherwise wait to buy
-                else:
-                    logger.debug(f"Waiting to buy product {best_building}")
-                    pass
-            
             except NoSuchWindowException:
                 logger.exception("Window not found.", exc_info=True)
                 raise
@@ -105,6 +77,42 @@ class CookieClicker(object):
             # all other exceptions should raise 
             except Exception:
                 raise
+    
+    def start_up(self):
+        self.driver.get(SITE_URL)
+        
+        # TODO: Use better method than sleep
+        # sleep to load
+        time.sleep(4)
+        self.cookie = self.driver.find_element_by_xpath(COOKIE_PATH)
+
+    def tick(self):
+        self.loops_since_cps_update += 1
+
+        for _ in range(CLICKS_PER_SECOND*2):
+            self.cookie.click()
+
+        logger.info(f"Current CPS: {self.get_current_production_cps()}")
+        
+        self.click_golden_cookie_if_possible()
+        self.purchase_upgrade_if_possible()
+
+        # Force a cps update every 10 cycles
+        if self.loops_since_cps_update > 10 :
+            self.loop_index = 0
+            self.update_building_info(update_cps=True)
+
+        # most efficient building key
+        best_building = self.get_best_building_to_purchase()
+        # check if available
+        product = self.driver.find_element_by_xpath(f"//*[@id=\"product{best_building}\"]")
+        if product.get_attribute("class") == "product unlocked enabled":
+            # purchase
+            self._click_non_upgrade_product(product)
+        # otherwise wait to buy
+        else:
+            logger.debug(f"Waiting to buy product {best_building}")
+            pass
     
     def get_best_building_to_purchase(self) -> int:
         # TODO: implement various startegies
@@ -189,9 +197,6 @@ class CookieClicker(object):
     def update_building_info(self, update_cps):
         """
         Must be called anytime an action is taken that could change the cost/cps
-        use the update_cost_cps_decorator
-
-        update_cps is optional becuase it takes along time and only need to be done when upgrade is bought
         """
         if update_cps:
             logger.debug("Updating CPS")
@@ -217,18 +222,7 @@ class CookieClicker(object):
             break
         
         if update_cps:
-            self.loops_since_cps_update = 0
-
-    def _click_upgrade_product(self, selenium_object, description=None):
-        selenium_object.click()
-        logger.debug(f"Clicking upgrade: {description}")
-        self.update_building_info(update_cps=True)
-
-
-    def _click_non_upgrade_product(self, selenium_object, description=None):
-        selenium_object.click()
-        logger.debug(f"Clicking non upgrade, non cookie: {description}")
-        self.update_building_info(update_cps=False)        
+            self.loops_since_cps_update = 0  
     
     def click_golden_cookie_if_possible(self) -> bool:
             clicked = False
@@ -255,6 +249,17 @@ class CookieClicker(object):
                 logger.error("Failed to click bonus")
             finally:
                 return clicked
+
+    def _click_upgrade_product(self, selenium_object, description=None):
+        selenium_object.click()
+        logger.debug(f"Clicking upgrade: {description}")
+        self.update_building_info(update_cps=True)
+
+
+    def _click_non_upgrade_product(self, selenium_object, description=None):
+        selenium_object.click()
+        logger.debug(f"Clicking non upgrade, non cookie: {description}")
+        self.update_building_info(update_cps=False)      
     
     def purchase_upgrade_if_possible(self):
         clicked = False
